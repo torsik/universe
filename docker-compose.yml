@@ -1,0 +1,16 @@
+services:
+  universe:
+    build: .
+    container_name: universe-bot
+    restart: unless-stopped
+    env_file: .env
+    # The bind mount below is owned by the HOST user. Without matching ids the
+    # container cannot write universe.db and the bot dies on first boot.
+    # Set PUID/PGID in .env to the output of `id -u` / `id -g`.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      TZ: ${TZ:-Europe/Dublin}
+      DB_PATH: /app/data/universe.db
+    volumes:
+      - ./data:/app/data
+    # Long polling only - no inbound ports, no public IP, no TLS needed.
