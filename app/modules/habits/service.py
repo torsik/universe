@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.db import Session, local_now, now
+from app.db import Session, local_now, now, to_local
 from app.modules.habits.models import Habit, HabitLog
 
 
@@ -129,13 +129,21 @@ def target_per_day(habit: Habit) -> int:
     return len(occurrences(habit))
 
 
-def window_label(habit: Habit) -> str:
+def window_label(habit: Habit, lang: str = "en") -> str:
+    from app.core.i18n import t
+
     if habit.kind != "interval":
         return f"{habit.hour:02d}:{habit.minute:02d}"
     every = habit.every_minutes
-    step = f"{every} min" if every < 60 else (f"{every // 60} h" if every % 60 == 0 else f"{every // 60} h {every % 60} min")
-    return (f"every {step}, {habit.hour:02d}:{habit.minute:02d}–"
-            f"{habit.end_hour:02d}:{habit.end_minute:02d}")
+    if every < 60:
+        step = t(lang, "date.min", n=every)
+    elif every % 60 == 0:
+        step = t(lang, "date.hour", n=every // 60)
+    else:
+        step = f"{t(lang, 'date.hour', n=every // 60)} {t(lang, 'date.min', n=every % 60)}"
+    return t(lang, "h.every", step=step,
+             start=f"{habit.hour:02d}:{habit.minute:02d}",
+             end=f"{habit.end_hour:02d}:{habit.end_minute:02d}")
 
 
 def progress(habit: Habit, day: date) -> tuple[int, int]:
@@ -151,13 +159,22 @@ def _scheduled_on(habit: Habit, day: date) -> bool:
     return str(day.weekday()) in habit.days
 
 
-def streak(habit: Habit, today: date) -> int:
+def born_on(habit: Habit, tz: str) -> date:
+    """The day it was created, on the owner's calendar.
+
+    created_at is UTC: read straight, a habit made at 01:00 in Kyiv would look
+    a day older and its first day would count as missed.
+    """
+    return to_local(habit.created_at, tz).date()
+
+
+def streak(habit: Habit, today: date, tz: str = "UTC") -> int:
     """Consecutive scheduled days completed, walking back from today.
 
     Today not yet logged does not break the streak - the day is not over.
     """
     done = {l.day for l in habit.logs if l.status == "done"}
-    floor = habit.created_at.date()
+    floor = born_on(habit, tz)
     count, cursor, misses = 0, today, 0
     while misses == 0 and cursor >= floor and cursor > today - timedelta(days=400):
         if _scheduled_on(habit, cursor):
@@ -178,10 +195,10 @@ def logged_today(habit: Habit, today: date) -> str | None:
     return None
 
 
-def last_30(habit: Habit, today: date) -> str:
+def last_30(habit: Habit, today: date, tz: str = "UTC") -> str:
     """Compact 30-day strip, oldest left. Days before the habit existed are blank."""
     by_day = {l.day: l.status for l in habit.logs}
-    born = habit.created_at.date()
+    born = born_on(habit, tz)
     out = []
     for i in range(29, -1, -1):
         d = today - timedelta(days=i)
@@ -204,11 +221,11 @@ def scheduled_today(habit: Habit, today: date) -> bool:
     return habit.active and _scheduled_on(habit, today)
 
 
-def best_streak(habit: Habit, today: date) -> int:
+def best_streak(habit: Habit, today: date, tz: str = "UTC") -> int:
     """Longest run of completed scheduled days, ever."""
     done = {l.day for l in habit.logs if l.status == "done"}
     best = run = 0
-    day = habit.created_at.date()
+    day = born_on(habit, tz)
     while day <= today:
         if _scheduled_on(habit, day):
             if day in done:
@@ -220,10 +237,10 @@ def best_streak(habit: Habit, today: date) -> int:
     return best
 
 
-def rate_30(habit: Habit, today: date) -> int | None:
+def rate_30(habit: Habit, today: date, tz: str = "UTC") -> int | None:
     """% of scheduled days done in the last 30 (today counts only once logged)."""
     by_day = {l.day: l.status for l in habit.logs}
-    start = max(habit.created_at.date(), today - timedelta(days=29))
+    start = max(born_on(habit, tz), today - timedelta(days=29))
     scheduled = done = 0
     day = start
     while day <= today:
@@ -237,9 +254,11 @@ def rate_30(habit: Habit, today: date) -> int | None:
 MILESTONES = (7, 30, 100, 365)
 
 
-def milestone(streak: int) -> str | None:
+def milestone(streak: int, lang: str = "en") -> str | None:
     """Worth celebrating in the reply to a check-in."""
-    return f"🏆 {streak} days in a row!" if streak in MILESTONES else None
+    from app.core.i18n import t
+
+    return t(lang, "h.milestone", n=streak) if streak in MILESTONES else None
 
 
 def week_bounds(today: date, offset: int = 0) -> tuple[date, date]:
@@ -248,11 +267,11 @@ def week_bounds(today: date, offset: int = 0) -> tuple[date, date]:
     return monday, monday + timedelta(days=6)
 
 
-def week_stats(habit: Habit, start: date, end: date, today: date) -> tuple[int, int]:
+def week_stats(habit: Habit, start: date, end: date, today: date, tz: str = "UTC") -> tuple[int, int]:
     """(done, scheduled so far) between two dates - the future isn't counted."""
     by_day = {l.day: l.status for l in habit.logs}
     done = scheduled = 0
-    day = max(start, habit.created_at.date())
+    day = max(start, born_on(habit, tz))
     while day <= min(end, today):
         if _scheduled_on(habit, day):
             scheduled += 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
+from app.core.i18n import days_short, month_short, t
 from app.db import local_now, now, to_local, to_utc
 
 WEEKDAYS = {
@@ -96,26 +97,26 @@ def _parse_when(text: str, tz: str) -> datetime:
     return cand if cand > base else cand + timedelta(days=1)
 
 
-def human(when: datetime, tz: str) -> str:
+def human(when: datetime, tz: str, lang: str = "en") -> str:
     dt = to_local(when, tz)
     delta = (dt.date() - local_now(tz).date()).days
     if delta == 0:
-        return f"today {dt:%H:%M}"
+        return t(lang, "date.today", time=f"{dt:%H:%M}")
     if delta == 1:
-        return f"tomorrow {dt:%H:%M}"
+        return t(lang, "date.tomorrow", time=f"{dt:%H:%M}")
     if 0 < delta < 7:
-        return f"{DAY_LABELS[dt.weekday()]} {dt:%H:%M}"
-    return f"{dt:%d %b} {dt:%H:%M}"
+        return f"{days_short(lang)[dt.weekday()]} {dt:%H:%M}"
+    return f"{dt.day} {month_short(lang, dt.month)} {dt:%H:%M}"
 
 
-def days_mask_label(mask: str) -> str:
+def days_mask_label(mask: str, lang: str = "en") -> str:
     if mask == "0123456":
-        return "every day"
+        return t(lang, "h.daily_label")
     if mask == "01234":
-        return "weekdays"
+        return t(lang, "h.weekdays")
     if mask == "56":
-        return "weekends"
-    return ", ".join(DAY_LABELS[int(d)] for d in mask)
+        return t(lang, "h.weekends")
+    return ", ".join(days_short(lang)[int(d)] for d in mask)
 
 
 def mask_to_cron(mask: str) -> str:
@@ -127,38 +128,36 @@ MONTHS = ["January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
 
 
-def long_date(when: datetime, tz: str) -> str:
-    """'Tue 22 Sep, 09:00' in the user's zone."""
+def long_date(when: datetime, tz: str, lang: str = "en") -> str:
+    """'Tue 22 Sep, 09:00' in the user's zone and language."""
     dt = to_local(when, tz)
-    return f"{DAY_LABELS[dt.weekday()]} {dt:%d %b}, {dt:%H:%M}"
+    return f"{days_short(lang)[dt.weekday()]} {dt.day} {month_short(lang, dt.month)}, {dt:%H:%M}"
 
 
-def relative(dt: datetime) -> str:
-    """'in 3 h', 'in 2 days', '20 min ago', 'overdue 3 days'."""
+def relative(dt: datetime, lang: str = "en") -> str:
+    """'in 3 h', 'in 2 days', '20 min ago'."""
     secs = (dt - now()).total_seconds()
     mins = abs(secs) / 60
     if mins < 60:
-        span = f"{max(1, round(mins))} min"
+        span = t(lang, "date.min", n=max(1, round(mins)))
     elif mins < 60 * 24:
-        span = f"{round(mins / 60)} h"
+        span = t(lang, "date.hour", n=round(mins / 60))
     else:
-        days = round(mins / 1440)
-        span = f"{days} day{'s' if days != 1 else ''}"
-    return f"in {span}" if secs >= 0 else f"{span} ago"
+        span = t(lang, "date.day", n=round(mins / 1440))
+    return t(lang, "date.in" if secs >= 0 else "date.ago", span=span)
 
 
 def _at(day, hour: int, minute: int = 0) -> datetime:
     return datetime(day.year, day.month, day.day, hour, minute)
 
 
-def quick_options(tz: str) -> list[tuple[str, str]]:
+def quick_options(tz: str, lang: str = "en") -> list[tuple[str, str]]:
     """(code, label) for one-tap due times, labelled relative to their now."""
-    n = local_now(tz)
-    opts = [("1h", "In 1 hour"), ("3h", "In 3 hours")]
-    if n.hour < 19:
-        opts.append(("eve", "Tonight 20:00"))
-    opts += [("tm9", "Tomorrow 09:00"), ("tm18", "Tomorrow 18:00"), ("mon9", "Next Mon 09:00")]
-    return opts
+    # Four at most: the calendar covers everything else, and a wall of
+    # near-identical buttons is harder to read than two rows.
+    hour = local_now(tz).hour
+    codes = ["1h"] + (["eve"] if hour < 19 else ["3h"]) + ["tm9"]
+    return [(code, t(lang, f"t.q.{code}")) for code in codes]
 
 
 def quick_when(code: str, tz: str) -> datetime:

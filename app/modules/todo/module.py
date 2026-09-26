@@ -6,11 +6,12 @@ from datetime import timedelta
 from app.core.dates import relative
 from app.core.registry import Digest, ModuleSpec
 from app.core.scheduler import ScheduleContext
+from app.core.i18n import t
 from app.core.ui import btn, clip
 from app.core.users import User
 from app.db import local_now, now, to_local, to_utc
 from app.modules.todo import handlers, service
-from app.modules.todo.handlers import M, NEW_TASK_BTN, TASKS_BTN, _bucket
+from app.modules.todo.handlers import M, NEW_TASK_KEY, TASKS_KEY, _bucket
 
 TODAY_LIMIT = 6
 
@@ -56,22 +57,22 @@ async def digest(user: User) -> Digest:
     done_today = await service.completed_since(user.id, to_utc(midnight, user.tz))
     due = [i for i in items if _bucket(i, user.tz) in ("overdue", "today")]
 
-    lines = ["📝 <b>Tasks</b>"]
+    lines = ["📝 <b>" + t(user.lang, "btn.tasks").split(" ", 1)[-1] + "</b>"]
     for i in due[:TODAY_LIMIT]:
         if _bucket(i, user.tz) == "overdue":
-            lines.append(f"⚠️ {html.escape(i.text)} · <i>{relative(i.due_at)}</i>")
+            lines.append(f"⚠️ {html.escape(i.text)} · <i>{relative(i.due_at, user.lang)}</i>")
         else:
             lines.append(f"• {html.escape(i.text)} · <i>{to_local(i.due_at, user.tz):%H:%M}</i>")
     if len(due) > TODAY_LIMIT:
-        lines.append(f"<i>…and {len(due) - TODAY_LIMIT} more</i>")
+        lines.append(t(user.lang, "td.more", n=len(due) - TODAY_LIMIT))
     if not due:
-        lines.append("Nothing due today 🎉")
+        lines.append(t(user.lang, "td.nothing"))
 
     extras = []
     if done_today:
-        extras.append(f"✨ {done_today} done today")
+        extras.append(t(user.lang, "td.done_today", n=done_today))
     if len(items) > len(due):
-        extras.append(f"{len(items) - len(due)} more on your list")
+        extras.append(t(user.lang, "td.more_open", n=len(items) - len(due)))
     if extras:
         lines.append(f"<i>{' · '.join(extras)}</i>")
 
@@ -87,7 +88,7 @@ MODULE = ModuleSpec(
     title="Tasks",
     router=handlers.router,
     order=10,
-    buttons=[(NEW_TASK_BTN, handlers.ask_new_task), (TASKS_BTN, handlers.show_tasks)],
+    buttons=[(NEW_TASK_KEY, handlers.ask_new_task), (TASKS_KEY, handlers.show_tasks)],
     schedule=schedule,
     digest=digest,
     fallback=handlers.fallback,

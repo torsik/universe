@@ -5,11 +5,12 @@ import html
 from app.core.dates import mask_to_cron
 from app.core.registry import Digest, ModuleSpec
 from app.core.scheduler import ScheduleContext
+from app.core.i18n import t
 from app.core.ui import btn, clip, progress_bar
 from app.core.users import User
 from app.db import local_today, now
 from app.modules.habits import handlers, service
-from app.modules.habits.handlers import HABITS_BTN, MARK, M
+from app.modules.habits.handlers import HABITS_KEY, MARK, M
 
 
 async def schedule(ctx: ScheduleContext) -> None:
@@ -57,10 +58,12 @@ async def digest(user: User) -> Digest | None:
     today = local_today(user.tz)
     todays = [h for h in habits if service.scheduled_today(h, today)]
     if not todays:
-        return Digest("🔁 <b>Habits</b>\nRest day. Nothing scheduled 🌿")
+        return Digest("🔁 <b>" + t(user.lang, "btn.habits").split(" ", 1)[-1] + "</b>"
+                      + t(user.lang, "h.rest"))
 
     done = sum(service.logged_today(h, today) == "done" for h in todays)
-    lines = [f"🔁 <b>Habits</b>  {progress_bar(done, len(todays), 8)} {done}/{len(todays)}"]
+    title = t(user.lang, "btn.habits").split(" ", 1)[-1]
+    lines = [f"🔁 <b>{title}</b>  {progress_bar(done, len(todays), 8)} {done}/{len(todays)}"]
     buttons = []
     for h in todays:
         status = service.logged_today(h, today)
@@ -74,9 +77,9 @@ async def digest(user: User) -> Digest | None:
         when = "" if status else f" · <i>{h.hour:02d}:{h.minute:02d}</i>"
         lines.append(f"{MARK.get(status, '▫️')} {html.escape(h.name)}{when}")
         if not status:
-            buttons.append(btn(f"✔️ Done: {clip(h.name, 24)}", f"{M}:tdone:{h.id}"))
+            buttons.append(btn(f"✔️ {clip(h.name, 24)}", f"{M}:tdone:{h.id}"))
     if done == len(todays):
-        lines.append("🎉 All done!")
+        lines.append(t(user.lang, "h.all_done"))
     return Digest("\n".join(lines), buttons)
 
 
@@ -85,7 +88,7 @@ MODULE = ModuleSpec(
     title="Habits",
     router=handlers.router,
     order=20,
-    buttons=[(HABITS_BTN, handlers.show_habits)],
+    buttons=[(HABITS_KEY, handlers.show_habits)],
     schedule=schedule,
     digest=digest,
 )

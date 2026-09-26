@@ -47,7 +47,7 @@ def build(bot: Bot) -> tuple[Dispatcher, Scheduler]:
             chat_id = update.message.chat.id
         elif update.callback_query:
             try:  # the handler may already have answered it
-                await update.callback_query.answer("Something broke. It's in the logs.", show_alert=True)
+                await update.callback_query.answer("⚠️ Error - see the logs", show_alert=True)
             except Exception:
                 pass
         if chat_id:
@@ -70,6 +70,49 @@ def build(bot: Bot) -> tuple[Dispatcher, Scheduler]:
     return dp, scheduler
 
 
+# Shown on the empty-chat screen, before anyone presses Start.
+DESCRIPTION = {
+    None: (
+        "Your personal assistant.\n\n"
+        "📝 Tasks with deadlines — type one and get reminded in time.\n"
+        "🔁 Habits with daily check-ins and streaks, once a day or every hour.\n"
+        "☀️ Everything for today on one screen.\n\n"
+        "No commands: it's all buttons. Press Start."
+    ),
+    "ru": (
+        "Ваш личный помощник.\n\n"
+        "📝 Задачи с дедлайнами — напишите задачу и получите напоминание вовремя.\n"
+        "🔁 Привычки с ежедневными отметками и сериями: раз в день или каждый час.\n"
+        "☀️ Все дела на сегодня на одном экране.\n\n"
+        "Никаких команд — всё на кнопках. Нажмите «Запустить»."
+    ),
+}
+# Shown under the bot's name in its profile and in search.
+SHORT = {
+    None: "Tasks with reminders and habits with streaks. All buttons, no commands.",
+    "ru": "Задачи с напоминаниями и привычки с сериями. Всё на кнопках.",
+}
+COMMAND = {None: "Open the assistant", "ru": "Открыть помощника"}
+
+
+async def publish_profile(bot: Bot) -> None:
+    """Descriptions and the command list, per language.
+
+    Telegram shows the description on the empty-chat screen before Start, so it
+    is the only thing a new person reads first.
+    """
+    for lang in (None, "ru"):
+        try:
+            await bot.set_my_description(description=DESCRIPTION[lang], language_code=lang)
+            await bot.set_my_short_description(short_description=SHORT[lang], language_code=lang)
+            # Everything is on buttons; /start only brings the keyboard back.
+            await bot.set_my_commands(
+                [BotCommand(command="start", description=COMMAND[lang])], language_code=lang
+            )
+        except Exception:
+            log.exception("could not publish the %s profile", lang or "default")
+
+
 async def main() -> None:
     logging.basicConfig(
         level=settings.log_level.upper(),
@@ -87,8 +130,7 @@ async def main() -> None:
     scheduler.start()
 
     try:
-        # Everything is on buttons; /start is only there to bring the keyboard back.
-        await bot.set_my_commands([BotCommand(command="start", description="Open the assistant")])
+        await publish_profile(bot)
         # Keep the backlog: a tap made while the bot was down still counts.
         # StaleMessageMiddleware discards anything too old to act on.
         await bot.delete_webhook(drop_pending_updates=False)

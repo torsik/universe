@@ -11,35 +11,40 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+from app.core.i18n import all_variants, t
 from app.core.registry import ButtonFn, discover
 
 log = logging.getLogger(__name__)
 
-TODAY_BTN = "☀️ Today"
+TODAY_KEY = "btn.today"
 NOOP = "noop"
 
 
-def main_keyboard() -> ReplyKeyboardMarkup:
+def main_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
     """The always-visible keyboard at the bottom of the chat.
 
     Built from the registry, so a new module's buttons appear automatically.
     """
-    labels = [TODAY_BTN] + [label for m in discover() for label, _ in m.buttons]
+    keys = [TODAY_KEY] + [key for m in discover() for key, _ in m.buttons]
+    labels = [t(lang, key) for key in keys]
     rows = [labels[i : i + 2] for i in range(0, len(labels), 2)]
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=t) for t in row] for row in rows],
+        keyboard=[[KeyboardButton(text=label) for label in row] for row in rows],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Type a task to add it…",
+        input_field_placeholder=t(lang, "placeholder"),
     )
 
 
 def button_actions() -> dict[str, ButtonFn]:
+    """Every language's label maps to the same action, so a press still works
+    right after someone switches language (their old keyboard is still shown)."""
     from app.core.today import show_today
 
-    actions: dict[str, ButtonFn] = {TODAY_BTN: show_today}
-    for mod in discover():
-        actions.update(dict(mod.buttons))
+    actions: dict[str, ButtonFn] = {}
+    for key, fn in [(TODAY_KEY, show_today)] + [(k, f) for m in discover() for k, f in m.buttons]:
+        for label in all_variants(key):
+            actions[label] = fn
     return actions
 
 

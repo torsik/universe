@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.config import settings
 from app.core import notify, users
+from app.core.i18n import t
 from app.core.scheduler import SWEEP_MINUTES, Scheduler
 from app.core.ui import btn, clip, kb, safe_edit
 from app.core.users import User
@@ -18,7 +19,7 @@ from app.modules.system import service
 log = logging.getLogger(__name__)
 router = Router(name="system")
 M = "system"
-MORE_BTN = "⚙️ More"
+MORE_KEY = "btn.more"
 
 
 def is_admin(user: User) -> bool:
@@ -26,14 +27,14 @@ def is_admin(user: User) -> bool:
 
 
 def render_more(user: User) -> tuple[str, InlineKeyboardMarkup]:
-    rows = [[btn("🌍 My timezone", f"{M}:tz"), btn("📤 Export my data", f"{M}:export")]]
+    rows = [[btn(t(user.lang, "lang.button"), f"{M}:lang"), btn(t(user.lang, "s.tz"), f"{M}:tz")],
+            [btn(t(user.lang, "s.export"), f"{M}:export")]]
     if is_admin(user):
-        rows.append([btn("👥 Users", f"{M}:users"), btn("💾 Backups", f"{M}:backups")])
-        rows.append([btn("📊 Scheduled jobs", f"{M}:jobs"), btn("ℹ️ Status", f"{M}:about")])
-    rows.append([btn("🗑 Delete my account", f"{M}:wipe")])
+        rows.append([btn(t(user.lang, "s.users"), f"{M}:users")])
+        rows.append([btn(t(user.lang, "s.jobs"), f"{M}:jobs"), btn(t(user.lang, "s.status"), f"{M}:about")])
+    rows.append([btn(t(user.lang, "s.wipe"), f"{M}:wipe")])
     return (
-        f"⚙️ <b>More</b>\n\n🌍 Timezone: <b>{user.tz}</b>\n"
-        f"🕐 Your local time: <b>{local_now(user.tz):%H:%M}</b>",
+        t(user.lang, "s.title", tz=user.tz, time=f"{local_now(user.tz):%H:%M}"),
         kb(*rows),
     )
 
@@ -53,10 +54,18 @@ async def cb_more(cq: CallbackQuery, user: User) -> None:
 # ---------- timezone ----------
 
 @router.callback_query(F.data == f"{M}:tz")
-async def cb_timezone(cq: CallbackQuery) -> None:
-    from app.core.common import ZONE_PROMPT, zone_kb
+async def cb_timezone(cq: CallbackQuery, user: User) -> None:
+    from app.core.common import zone_kb
 
-    await safe_edit(cq, ZONE_PROMPT, reply_markup=zone_kb())
+    await safe_edit(cq, t(user.lang, "zone.prompt"), reply_markup=zone_kb(user.lang))
+    await cq.answer()
+
+
+@router.callback_query(F.data == f"{M}:lang")
+async def cb_language(cq: CallbackQuery, user: User) -> None:
+    from app.core.common import lang_kb
+
+    await safe_edit(cq, t(user.lang, "lang.prompt"), reply_markup=lang_kb())
     await cq.answer()
 
 
@@ -68,7 +77,7 @@ async def cb_export(cq: CallbackQuery, user: User) -> None:
     from app.modules.habits import service as habits
     from app.modules.todo import service as todo
 
-    await cq.answer("Collecting…")
+    await cq.answer(t(user.lang, "s.collecting"))
     lines = [f"# Universe export · {local_now(user.tz):%Y-%m-%d %H:%M} · {user.tz}", "", "## Tasks"]
     for item in await todo.open_items(user.id):
         due = to_local(item.due_at, user.tz).strftime("%Y-%m-%d %H:%M") if item.due_at else "-"
@@ -87,18 +96,17 @@ async def cb_export(cq: CallbackQuery, user: User) -> None:
     await notify.send_document(
         cq.bot, user.id,
         BufferedInputFile(data, filename=f"universe-export-{local_now(user.tz):%Y%m%d}.md"),
-        what="export", caption="📤 Your tasks and habits.",
+        what="export", caption=t(user.lang, "s.export_caption"),
     )
 
 
 @router.callback_query(F.data == f"{M}:wipe")
-async def cb_wipe(cq: CallbackQuery) -> None:
+async def cb_wipe(cq: CallbackQuery, user: User) -> None:
     await safe_edit(
         cq,
-        "🗑 <b>Delete your account?</b>\n\n"
-        "Every task, habit and day of history you have goes with it. "
-        "This can't be undone.",
-        reply_markup=kb([btn("🗑 Yes, delete everything", f"{M}:wipeok"), btn("✖️ Keep it", f"{M}:more")]),
+        t(user.lang, "s.wipe_q"),
+        reply_markup=kb([btn(t(user.lang, "s.wipe_ok"), f"{M}:wipeok"),
+                         btn(t(user.lang, "keep"), f"{M}:more")]),
     )
     await cq.answer()
 
@@ -107,8 +115,8 @@ async def cb_wipe(cq: CallbackQuery) -> None:
 async def cb_wipe_ok(cq: CallbackQuery, scheduler: Scheduler, user: User) -> None:
     await users.delete(user.id)
     await scheduler.refresh()
-    await safe_edit(cq, "Everything is gone. Send /start if you ever want to come back.")
-    await cq.answer("Deleted")
+    await safe_edit(cq, t(user.lang, "s.wiped"))
+    await cq.answer(t(user.lang, "deleted"))
 
 
 # ---------- admin ----------
@@ -116,7 +124,7 @@ async def cb_wipe_ok(cq: CallbackQuery, scheduler: Scheduler, user: User) -> Non
 @router.callback_query(F.data == f"{M}:users")
 async def cb_users(cq: CallbackQuery, user: User) -> None:
     if not is_admin(user):
-        await cq.answer("Admins only.", show_alert=True)
+        await cq.answer(t(user.lang, "admins_only"), show_alert=True)
         return
     from app.modules.habits import service as habits
     from app.modules.todo import service as todo
@@ -135,65 +143,10 @@ async def cb_users(cq: CallbackQuery, user: User) -> None:
     await cq.answer()
 
 
-@router.callback_query(F.data == f"{M}:backups")
-async def cb_backups(cq: CallbackQuery, user: User) -> None:
-    if not is_admin(user):
-        await cq.answer("Admins only.", show_alert=True)
-        return
-    files = service.existing()
-    lines = ["💾 <b>Backups on the server</b>", f"<code>{service.backup_dir()}</code>", ""]
-    lines += [f"• {f.name} · {round(f.stat().st_size / 1024)} KB" for f in files] or ["Nothing yet."]
-    lines.append("\n<i>Made daily at 04:30, last 7 kept.</i>")
-    await safe_edit(
-        cq, "\n".join(lines),
-        reply_markup=kb(
-            [btn("💾 Back up now", f"{M}:backup")],
-            [btn("📥 Send me the latest", f"{M}:fetch"), btn("◀️ Back", f"{M}:more")],
-        ),
-    )
-    await cq.answer()
-
-
-@router.callback_query(F.data == f"{M}:backup")
-async def cb_backup(cq: CallbackQuery, user: User) -> None:
-    if not is_admin(user):
-        await cq.answer("Admins only.", show_alert=True)
-        return
-    await cq.answer("Backing up…")
-    try:
-        path = await service.make_backup()
-    except Exception as e:
-        log.exception("backup failed")
-        await cq.message.answer(f"⚠️ Backup failed: {e}")
-        return
-    await cb_backups(cq, user)
-    await cq.message.answer(f"✅ Saved <code>{path.name}</code> on the server.")
-
-
-@router.callback_query(F.data == f"{M}:fetch")
-async def cb_fetch(cq: CallbackQuery, user: User) -> None:
-    """Hand the newest copy over - the whole database, so admins only."""
-    if not is_admin(user):
-        await cq.answer("Admins only.", show_alert=True)
-        return
-    files = service.existing()
-    if not files:
-        await cq.answer("No backups yet. Make one first.", show_alert=True)
-        return
-    from aiogram.types import FSInputFile
-
-    await cq.answer("Sending…")
-    await notify.send_document(
-        cq.bot, user.id, FSInputFile(files[0], filename=files[0].name),
-        what="backup download",
-        caption="💾 Restore: stop the bot, put this at <code>data/universe.db</code>, start it again.",
-    )
-
-
 @router.callback_query(F.data == f"{M}:jobs")
 async def cb_jobs(cq: CallbackQuery, scheduler: Scheduler, user: User) -> None:
     if not is_admin(user):
-        await cq.answer("Admins only.", show_alert=True)
+        await cq.answer(t(user.lang, "admins_only"), show_alert=True)
         return
     jobs = sorted(scheduler.jobs, key=lambda j: j.id)
     shown = jobs[:25]
@@ -207,7 +160,7 @@ async def cb_jobs(cq: CallbackQuery, scheduler: Scheduler, user: User) -> None:
         lines.append(f"<i>…and {len(jobs) - len(shown)} more</i>")
     await safe_edit(
         cq, f"📊 <b>Scheduled jobs</b> · {len(jobs)}\n" + "\n".join(lines),
-        reply_markup=kb([btn("◀️ Back", f"{M}:more")]),
+        reply_markup=kb([btn(t(user.lang, "back"), f"{M}:more")]),
     )
     await cq.answer()
 
@@ -225,7 +178,7 @@ def _failures_block() -> str:
 @router.callback_query(F.data == f"{M}:about")
 async def cb_about(cq: CallbackQuery, scheduler: Scheduler, user: User) -> None:
     if not is_admin(user):
-        await cq.answer("Admins only.", show_alert=True)
+        await cq.answer(t(user.lang, "admins_only"), show_alert=True)
         return
     from app.modules.habits import service as habits
     from app.modules.todo import service as todo
@@ -241,7 +194,7 @@ async def cb_about(cq: CallbackQuery, scheduler: Scheduler, user: User) -> None:
         f"💾 Database: {service.db_size_kb()} KB · {len(service.existing())} backup(s)\n"
         f"⏱ {len(scheduler.jobs)} scheduled job(s), re-checked every {SWEEP_MINUTES} min\n"
         + _failures_block(),
-        reply_markup=kb([btn("◀️ Back", f"{M}:more")]),
+        reply_markup=kb([btn(t(user.lang, "back"), f"{M}:more")]),
     )
     await cq.answer()
 

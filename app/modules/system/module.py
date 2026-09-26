@@ -15,6 +15,6 @@ MODULE = ModuleSpec(
     title="More",
     router=handlers.router,
     order=90,
-    buttons=[(handlers.MORE_BTN, handlers.show_more)],
+    buttons=[(handlers.MORE_KEY, handlers.show_more)],
     schedule=schedule,
 )

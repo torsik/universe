@@ -19,6 +19,7 @@ class User(Base):
     # The Telegram user id, so there is no second identity to reconcile.
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     tz: Mapped[str] = mapped_column(String(64), default=settings.tz)
+    lang: Mapped[str] = mapped_column(String(5), default="en")
     first_name: Mapped[str] = mapped_column(String(120), default="")
     username: Mapped[str] = mapped_column(String(120), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -48,7 +49,8 @@ async def all_users(only_active: bool = True) -> list[User]:
         return list((await s.scalars(q)).all())
 
 
-async def register(user_id: int, first_name: str = "", username: str = "") -> tuple[User | None, bool]:
+async def register(user_id: int, first_name: str = "", username: str = "",
+                   lang: str = "en") -> tuple[User | None, bool]:
     """Returns (user, created). None means the bot is full."""
     async with Session() as s:
         existing = await s.get(User, user_id)
@@ -63,7 +65,8 @@ async def register(user_id: int, first_name: str = "", username: str = "") -> tu
         if total >= settings.max_users and user_id != settings.owner_id:
             log.warning("rejected %s: %d users already registered", user_id, total)
             return None, False
-        user = User(id=user_id, first_name=first_name, username=username, tz=settings.tz)
+        user = User(id=user_id, first_name=first_name, username=username,
+                    tz=settings.tz, lang=lang)
         s.add(user)
         await s.commit()
         log.info("registered new user %s (%s)", user_id, username or first_name)

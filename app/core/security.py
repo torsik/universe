@@ -58,16 +58,19 @@ class UserMiddleware(BaseMiddleware):
 
         user = await users.get(tg.id)
         if user is None:
-            user, created = await users.register(tg.id, tg.first_name or "", tg.username or "")
+            from app.core.i18n import pick_lang
+
+            user, created = await users.register(
+                tg.id, tg.first_name or "", tg.username or "", pick_lang(tg.language_code)
+            )
             if user is None:  # the bot is full
-                text = (
-                    "Sorry, this bot is private and currently full. "
-                    f"Ask the owner to add you (id <code>{tg.id}</code>)."
-                )
+                from app.core.i18n import t
+
+                lang = pick_lang(tg.language_code)
                 if isinstance(event, CallbackQuery):
-                    await event.answer("This bot is full.", show_alert=True)
+                    await event.answer(t(lang, "full.short"), show_alert=True)
                 elif isinstance(event, Message):
-                    await event.answer(text)
+                    await event.answer(t(lang, "full", id=tg.id))
                 log.warning("turned away user %s (@%s)", tg.id, tg.username)
                 return None
         elif isinstance(event, Message):

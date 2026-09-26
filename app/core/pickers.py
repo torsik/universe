@@ -7,13 +7,14 @@ from datetime import date
 
 from aiogram.types import InlineKeyboardMarkup
 
-from app.core.dates import MONTHS
+from app.core.i18n import days_mini, month_full, t
 from app.core.ui import NOOP, btn, kb
 
 TIMES = ["07:00", "08:00", "09:00", "10:00", "12:00", "15:00", "18:00", "20:00", "21:00", "22:00"]
 
 
-def calendar_kb(prefix: str, year: int, month: int, *, today: date, back_cb: str) -> InlineKeyboardMarkup:
+def calendar_kb(prefix: str, year: int, month: int, *, today: date, back_cb: str,
+                lang: str = "en") -> InlineKeyboardMarkup:
     """Month grid. Navigation -> f"{prefix}:m:YYYYMM", pick -> f"{prefix}:d:YYYYMMDD".
 
     Past days are shown but inert, so the grid keeps its shape.
@@ -24,10 +25,10 @@ def calendar_kb(prefix: str, year: int, month: int, *, today: date, back_cb: str
 
     rows = [[
         btn(" " if at_start else "◀️", NOOP if at_start else f"{prefix}:m:{prev_y}{prev_m:02d}"),
-        btn(f"{MONTHS[month - 1]} {year}", NOOP),
+        btn(f"{month_full(lang, month)} {year}", NOOP),
         btn("▶️", f"{prefix}:m:{next_y}{next_m:02d}"),
     ]]
-    rows.append([btn(d, NOOP) for d in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]])
+    rows.append([btn(d, NOOP) for d in days_mini(lang)])
     for week in calendar.monthcalendar(year, month):
         # Weeks entirely in the past are just noise: drop them.
         if all(day == 0 or date(year, month, day) < today for day in week):
@@ -44,15 +45,16 @@ def calendar_kb(prefix: str, year: int, month: int, *, today: date, back_cb: str
                 label = f"•{day}•" if d == today else str(day)
                 row.append(btn(label, f"{prefix}:d:{d:%Y%m%d}"))
         rows.append(row)
-    rows.append([btn("◀️ Back", back_cb)])
+    rows.append([btn(t(lang, "back"), back_cb)])
     return kb(*rows)
 
 
-def time_kb(prefix: str, *, back_cb: str, custom_cb: str, after: tuple[int, int] | None = None) -> InlineKeyboardMarkup:
+def time_kb(prefix: str, *, back_cb: str, custom_cb: str, after: tuple[int, int] | None = None,
+            lang: str = "en") -> InlineKeyboardMarkup:
     """Grid of common times -> f"{prefix}:HHMM". `after` hides times already
     past (used when the chosen day is today)."""
     times = [t for t in TIMES if after is None or tuple(map(int, t.split(":"))) > after]
     cells = [btn(t, f"{prefix}:{t.replace(':', '')}") for t in times]
     rows = [cells[i : i + 4] for i in range(0, len(cells), 4)]
-    rows.append([btn("⌨️ Other time", custom_cb), btn("◀️ Back", back_cb)])
+    rows.append([btn(t(lang, "t.other_time"), custom_cb), btn(t(lang, "back"), back_cb)])
     return kb(*rows)

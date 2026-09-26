@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
+from app.core.i18n import LANG_NAMES, LANGS, t
 from app.core.today import render_today
 from app.core.ui import NOOP, btn, button_actions, kb, main_keyboard, safe_edit
 from app.core.users import User
@@ -28,27 +29,15 @@ class Onboarding(StatesGroup):
     zone = State()
 
 
-def zone_kb() -> InlineKeyboardMarkup:
+def lang_kb() -> InlineKeyboardMarkup:
+    return kb([btn(LANG_NAMES[code], f"lang:set:{code}") for code in LANGS])
+
+
+def zone_kb(lang: str) -> InlineKeyboardMarkup:
     cells = [btn(label, f"tz:set:{name}") for label, name in ZONES]
     rows = [cells[i : i + 3] for i in range(0, len(cells), 3)]
-    rows.append([btn("⌨️ Type my timezone", "tz:type")])
+    rows.append([btn(t(lang, "zone.type"), "tz:type")])
     return kb(*rows)
-
-
-ZONE_PROMPT = (
-    "🌍 <b>Which timezone are you in?</b>\n"
-    "<i>Reminders and deadlines follow it.</i>"
-)
-
-
-WELCOME = (
-    "👋 <b>Hi! I'm your personal assistant.</b>\n\n"
-    "📝 <b>Tasks</b>: just type anything and I'll add it. Give it a due time "
-    "and I'll remind you.\n"
-    "🔁 <b>Habits</b>: daily check-ins with reminders and streaks.\n"
-    "☀️ <b>Today</b>: everything for today on one screen.\n\n"
-    "Use the buttons below 👇"
-)
 
 
 class KeyboardButtonPressed(Filter):
@@ -66,9 +55,26 @@ class KeyboardButtonPressed(Filter):
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, user: User) -> None:
     await state.clear()
-    await message.answer(WELCOME, reply_markup=main_keyboard())
+    await message.answer(t(user.lang, "welcome"), reply_markup=main_keyboard(user.lang))
     if not user.onboarded:
-        await message.answer(ZONE_PROMPT, reply_markup=zone_kb())
+        # Language first: the zone question should already be in their language.
+        await message.answer(t(user.lang, "lang.prompt"), reply_markup=lang_kb())
+
+
+@router.callback_query(F.data.startswith("lang:set:"))
+async def cb_set_lang(cq: CallbackQuery, user: User) -> None:
+    from app.core import users
+
+    code = cq.data.split(":")[2]
+    if code not in LANGS:
+        await cq.answer()
+        return
+    await users.update(user.id, lang=code)
+    await safe_edit(cq, t(code, "lang.set", name=LANG_NAMES[code]))
+    await cq.message.answer(t(code, "welcome"), reply_markup=main_keyboard(code))
+    if not user.onboarded:
+        await cq.message.answer(t(code, "zone.prompt"), reply_markup=zone_kb(code))
+    await cq.answer()
 
 
 @router.callback_query(F.data.startswith("tz:set:"))
@@ -77,17 +83,14 @@ async def cb_set_zone(cq: CallbackQuery, user: User) -> None:
 
     name = cq.data.split(":", 2)[2]
     await users.update(user.id, tz=name, onboarded=1)
-    await safe_edit(cq, f"🌍 Timezone set to <b>{name}</b>.\nEverything follows your local clock now.")
-    await cq.answer("Saved")
+    await safe_edit(cq, t(user.lang, "zone.set", tz=name))
+    await cq.answer(t(user.lang, "saved"))
 
 
 @router.callback_query(F.data == "tz:type")
-async def cb_type_zone(cq: CallbackQuery, state: FSMContext) -> None:
+async def cb_type_zone(cq: CallbackQuery, state: FSMContext, user: User) -> None:
     await state.set_state(Onboarding.zone)
-    await safe_edit(
-        cq,
-        "⌨️ <b>Type your timezone</b>\n<i>Like</i> <code>Europe/Kyiv</code> <i>or</i> <code>Asia/Tokyo</code>",
-    )
+    await safe_edit(cq, t(user.lang, "zone.type_prompt"))
     await cq.answer()
 
 
@@ -101,12 +104,11 @@ async def typed_zone(message: Message, state: FSMContext, user: User) -> None:
     try:
         ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError, KeyError):
-        await message.answer("🤔 I don't know that one. Try <code>Europe/Kyiv</code>, or pick from the list.",
-                             reply_markup=zone_kb())
+        await message.answer(t(user.lang, "zone.unknown"), reply_markup=zone_kb(user.lang))
         return
     await state.clear()
     await users.update(user.id, tz=name, onboarded=1)
-    await message.answer(f"🌍 Timezone set to <b>{name}</b>.", reply_markup=main_keyboard())
+    await message.answer(t(user.lang, "zone.set", tz=name), reply_markup=main_keyboard(user.lang))
 
 
 @router.message(KeyboardButtonPressed())
@@ -119,7 +121,7 @@ async def on_keyboard(message: Message, state: FSMContext, action, user: User) -
 async def today_refresh(cq: CallbackQuery, user: User) -> None:
     text, markup = await render_today(user)
     await safe_edit(cq, text, reply_markup=markup)
-    await cq.answer("Updated")
+    await cq.answer(t(user.lang, "today.updated"))
 
 
 @router.callback_query(F.data == NOOP)
@@ -133,5 +135,5 @@ stale = Router(name="stale-buttons")
 
 
 @stale.callback_query()
-async def cb_stale(cq: CallbackQuery) -> None:
-    await cq.answer("This button is from an older version. Use the buttons below 👇", show_alert=True)
+async def cb_stale(cq: CallbackQuery, user: User | None = None) -> None:
+    await cq.answer(t(user.lang if user else "en", "stale_button"), show_alert=True)
