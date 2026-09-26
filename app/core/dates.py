@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
-from app.db import now
+from app.db import local_now, now, to_local, to_utc
 
 WEEKDAYS = {
     "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
@@ -28,31 +28,32 @@ def parse_time(text: str) -> tuple[int, int]:
     return hour, minute
 
 
-def parse_future(text: str) -> datetime:
+def parse_future(text: str, tz: str) -> datetime:
     """parse_when, but a deadline in the past is an input error, not a reminder."""
-    when = parse_when(text)
+    when = parse_when(text, tz)
     if when <= now():
-        raise ParseError(f"That's in the past ({human(when)}). Try a later time.")
+        raise ParseError(f"That's in the past ({human(when, tz)}). Try a later time.")
     return when
 
 
-def parse_when(text: str) -> datetime:
+def parse_when(text: str, tz: str) -> datetime:
+    """What the user typed, read in their zone, returned as UTC."""
     try:
-        return _parse_when(text)
+        return to_utc(_parse_when(text, tz), tz)
     except ParseError:
         raise
     except ValueError:  # '31/02 10:00' - shaped right, not a real date
         raise ParseError("That date doesn't exist.") from None
 
 
-def _parse_when(text: str) -> datetime:
+def _parse_when(text: str, tz: str) -> datetime:
     """Flexible one-off reminder times.
 
     Accepts: 'in 90m', 'in 2h', '18:00', 'tomorrow 18:00', 'fri 09:00',
     '2026-09-20 18:00', '20/09 18:00'.
     """
     raw = text.strip().lower()
-    base = now()
+    base = local_now(tz)
 
     m = re.fullmatch(r"in\s+(\d+)\s*(m|min|mins|minutes|h|hr|hrs|hours|d|days?)", raw)
     if m:
@@ -95,9 +96,9 @@ def _parse_when(text: str) -> datetime:
     return cand if cand > base else cand + timedelta(days=1)
 
 
-def human(dt: datetime) -> str:
-    today = now().date()
-    delta = (dt.date() - today).days
+def human(when: datetime, tz: str) -> str:
+    dt = to_local(when, tz)
+    delta = (dt.date() - local_now(tz).date()).days
     if delta == 0:
         return f"today {dt:%H:%M}"
     if delta == 1:
@@ -120,3 +121,65 @@ def days_mask_label(mask: str) -> str:
 def mask_to_cron(mask: str) -> str:
     names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
     return ",".join(names[int(d)] for d in mask)
+
+
+MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+          "August", "September", "October", "November", "December"]
+
+
+def long_date(when: datetime, tz: str) -> str:
+    """'Tue 22 Sep, 09:00' in the user's zone."""
+    dt = to_local(when, tz)
+    return f"{DAY_LABELS[dt.weekday()]} {dt:%d %b}, {dt:%H:%M}"
+
+
+def relative(dt: datetime) -> str:
+    """'in 3 h', 'in 2 days', '20 min ago', 'overdue 3 days'."""
+    secs = (dt - now()).total_seconds()
+    mins = abs(secs) / 60
+    if mins < 60:
+        span = f"{max(1, round(mins))} min"
+    elif mins < 60 * 24:
+        span = f"{round(mins / 60)} h"
+    else:
+        days = round(mins / 1440)
+        span = f"{days} day{'s' if days != 1 else ''}"
+    return f"in {span}" if secs >= 0 else f"{span} ago"
+
+
+def _at(day, hour: int, minute: int = 0) -> datetime:
+    return datetime(day.year, day.month, day.day, hour, minute)
+
+
+def quick_options(tz: str) -> list[tuple[str, str]]:
+    """(code, label) for one-tap due times, labelled relative to their now."""
+    n = local_now(tz)
+    opts = [("1h", "In 1 hour"), ("3h", "In 3 hours")]
+    if n.hour < 19:
+        opts.append(("eve", "Tonight 20:00"))
+    opts += [("tm9", "Tomorrow 09:00"), ("tm18", "Tomorrow 18:00"), ("mon9", "Next Mon 09:00")]
+    return opts
+
+
+def quick_when(code: str, tz: str) -> datetime:
+    """Resolve a quick code at tap time, so a stale button still means the
+    obvious thing (a 'Tonight' tapped after 20:00 rolls to tomorrow). -> UTC."""
+    n = local_now(tz).replace(second=0, microsecond=0)
+    today = n.date()
+    if code == "1h":
+        local = n + timedelta(hours=1)
+    elif code == "3h":
+        local = n + timedelta(hours=3)
+    elif code == "eve":
+        t = _at(today, 20)
+        local = t if t > n else t + timedelta(days=1)
+    elif code == "tm9":
+        local = _at(today + timedelta(days=1), 9)
+    elif code == "tm18":
+        local = _at(today + timedelta(days=1), 18)
+    elif code == "mon9":
+        ahead = (0 - today.weekday()) % 7 or 7
+        local = _at(today + timedelta(days=ahead), 9)
+    else:
+        raise ParseError(f"unknown quick time {code!r}")
+    return to_utc(local, tz)

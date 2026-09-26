@@ -13,31 +13,22 @@ from app.config import settings
 from app.core import common
 from app.core.registry import discover
 from app.core.scheduler import Scheduler
-from app.core.security import OwnerOnlyMiddleware
+from app.core.security import StaleMessageMiddleware, UserMiddleware
 from app.db import init_db
 
 log = logging.getLogger("universe")
 
 
-async def main() -> None:
-    logging.basicConfig(
-        level=settings.log_level.upper(),
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-    )
-
+def build(bot: Bot) -> tuple[Dispatcher, Scheduler]:
+    """Wire the dispatcher. Separate from main() so tests drive the exact
+    production setup through a fake Telegram session."""
     modules = discover()
-    await init_db()
-    log.info("loaded modules: %s", ", ".join(m.name for m in modules))
-
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
-    )
     dp = Dispatcher(storage=MemoryStorage())
 
-    # Outer: unauthorised updates never reach a handler or touch the FSM.
-    dp.message.outer_middleware(OwnerOnlyMiddleware())
-    dp.callback_query.outer_middleware(OwnerOnlyMiddleware())
+    # Outer: every handler receives the person it is acting for.
+    dp.message.outer_middleware(StaleMessageMiddleware())
+    dp.message.outer_middleware(UserMiddleware())
+    dp.callback_query.outer_middleware(UserMiddleware())
 
     scheduler = Scheduler(bot)
     dp["scheduler"] = scheduler  # injected into any handler that asks for it
@@ -56,12 +47,12 @@ async def main() -> None:
             chat_id = update.message.chat.id
         elif update.callback_query:
             try:  # the handler may already have answered it
-                await update.callback_query.answer("Something broke - check the logs.", show_alert=True)
+                await update.callback_query.answer("Something broke. It's in the logs.", show_alert=True)
             except Exception:
                 pass
         if chat_id:
             try:
-                await bot.send_message(chat_id, "\u26a0\ufe0f Something broke. It is in the logs.")
+                await bot.send_message(chat_id, "\u26a0\ufe0f Something broke. It's in the logs.")
             except Exception:
                 log.exception("could not report the error to the owner")
         return True
@@ -71,21 +62,36 @@ async def main() -> None:
         dp.include_router(mod.router)
         if mod.schedule:
             scheduler.register(mod.name, mod.schedule)
+    # Catch-alls go last so they only see what no module claimed.
+    for mod in modules:
+        if mod.fallback:
+            dp.include_router(mod.fallback)
+    dp.include_router(common.stale)
+    return dp, scheduler
 
+
+async def main() -> None:
+    logging.basicConfig(
+        level=settings.log_level.upper(),
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    )
+    await init_db()
+    log.info("loaded modules: %s", ", ".join(m.name for m in discover()))
+
+    bot = Bot(
+        token=settings.bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
+    )
+    dp, scheduler = build(bot)
     await scheduler.refresh()
     scheduler.start()
 
     try:
-        await bot.set_my_commands(
-            [
-                BotCommand(command="menu", description="Main menu"),
-                BotCommand(command="today", description="Today at a glance"),
-                BotCommand(command="add", description="Quick-add a to-do"),
-                BotCommand(command="jobs", description="Show scheduled jobs"),
-                BotCommand(command="cancel", description="Cancel current action"),
-            ]
-        )
-        await bot.delete_webhook(drop_pending_updates=True)
+        # Everything is on buttons; /start is only there to bring the keyboard back.
+        await bot.set_my_commands([BotCommand(command="start", description="Open the assistant")])
+        # Keep the backlog: a tap made while the bot was down still counts.
+        # StaleMessageMiddleware discards anything too old to act on.
+        await bot.delete_webhook(drop_pending_updates=False)
         log.info("polling as @%s", (await bot.me()).username)
         await dp.start_polling(bot)
     finally:

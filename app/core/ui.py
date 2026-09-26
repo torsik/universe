@@ -3,14 +3,69 @@ from __future__ import annotations
 import logging
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
-from app.core.registry import discover
+from app.core.registry import ButtonFn, discover
 
 log = logging.getLogger(__name__)
 
-MENU_CB = "menu"
+TODAY_BTN = "☀️ Today"
+NOOP = "noop"
+
+
+def main_keyboard() -> ReplyKeyboardMarkup:
+    """The always-visible keyboard at the bottom of the chat.
+
+    Built from the registry, so a new module's buttons appear automatically.
+    """
+    labels = [TODAY_BTN] + [label for m in discover() for label, _ in m.buttons]
+    rows = [labels[i : i + 2] for i in range(0, len(labels), 2)]
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=t) for t in row] for row in rows],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Type a task to add it…",
+    )
+
+
+def button_actions() -> dict[str, ButtonFn]:
+    from app.core.today import show_today
+
+    actions: dict[str, ButtonFn] = {TODAY_BTN: show_today}
+    for mod in discover():
+        actions.update(dict(mod.buttons))
+    return actions
+
+
+def btn(text: str, data: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data=data)
+
+
+def kb(*rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[r for r in rows if r])
+
+
+def cancel_kb(back_cb: str, label: str = "✖️ Cancel") -> InlineKeyboardMarkup:
+    return kb([btn(label, back_cb)])
+
+
+def progress_bar(done: int, total: int, width: int = 10) -> str:
+    if total <= 0:
+        return ""
+    filled = round(width * done / total)
+    return "▰" * filled + "▱" * (width - filled)
+
+
+def clip(text: str, n: int = 32) -> str:
+    """Button labels have no wrapping - keep them short."""
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[: n - 1] + "…"
 
 
 async def safe_edit(cq: CallbackQuery, text: str, reply_markup=None) -> None:
@@ -33,23 +88,3 @@ async def safe_edit(cq: CallbackQuery, text: str, reply_markup=None) -> None:
             await cq.message.answer(text, reply_markup=reply_markup)
         except TelegramBadRequest:
             log.warning("could not deliver update for callback %s", cq.data)
-
-
-def main_menu() -> InlineKeyboardMarkup:
-    """Built from the registry - a new module appears here automatically."""
-    kb = InlineKeyboardBuilder()
-    for mod in discover():
-        kb.button(text=mod.title, callback_data=f"open:{mod.name}")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def back_row(module: str | None = None) -> list[InlineKeyboardButton]:
-    row = [InlineKeyboardButton(text="🏠 Menu", callback_data=MENU_CB)]
-    if module:
-        row.insert(0, InlineKeyboardButton(text="◀️ Back", callback_data=f"open:{module}"))
-    return row
-
-
-def cancel_kb(module: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[back_row(module)])
